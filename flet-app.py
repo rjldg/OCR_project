@@ -13,9 +13,6 @@ from PIL import Image, ImageDraw
 import flet as ft
 from flet import AppBar, CupertinoFilledButton, Page, Container, Text, View, FontWeight, colors, TextButton, padding, ThemeMode, border_radius, Image as FletImage, FilePicker, FilePickerResultEvent, icons
 
-from image_classifier.resnet50_archi import resnet50
-from main import predict, retrieve_and_generate_response, ref_class_names
-
 first_prompt_entered = True
 
 # Load environment variables
@@ -157,8 +154,8 @@ def main(page: Page):
 
     restart_button = TextButton(content=Text("Start over", font_family="RobotoMono", size=14, weight=FontWeight.W_300, color="#cbddd1"), visible=False, on_click=restart_process)
 
-    initial_image = ft.Image(src="assets/result_initial_new.png", width=350, height=350, border_radius=border_radius.all(10))
-    result_image = ft.Image(src="assets/result_initial_new.png", width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
+    initial_image = ft.Image(src="assets/result_initial.png", width=350, height=350, border_radius=border_radius.all(10))
+    result_image = ft.Image(src="assets/result_initial.png", width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
     result_image.visible = False
 
     file_picker = FilePicker()
@@ -238,7 +235,7 @@ def main(page: Page):
                                     Container(
                                         content=prompt_container,
                                         width=400,
-                                        padding=padding.only(left=10, top=25)
+                                        padding=padding.only(left=10, top=50)
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.CENTER,
