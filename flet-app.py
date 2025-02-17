@@ -1,13 +1,15 @@
 import os
+import boto3
 import numpy as np
 import mindspore as ms
 import time
 
+from dotenv import load_dotenv
 from mindspore import Tensor
 from mindspore.train import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 from mindspore.nn import Softmax
-from PIL import Image
+from PIL import Image, ImageDraw
 import flet as ft
 from flet import AppBar, CupertinoFilledButton, Page, Container, Text, View, FontWeight, colors, TextButton, padding, ThemeMode, border_radius, Image as FletImage, FilePicker, FilePickerResultEvent, icons
 
@@ -15,6 +17,70 @@ from image_classifier.resnet50_archi import resnet50
 from main import predict, retrieve_and_generate_response, ref_class_names
 
 first_prompt_entered = True
+
+# Load environment variables
+load_dotenv()
+AWS_REGION = os.getenv("AWS_REGION_TEXTRACT")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID_TEXTRACT")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY_TEXTRACT")
+
+# AWS Textract Client
+client = boto3.client(
+    'textract',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
+
+def ShowBoundingBox(draw, box, width, height, boxColor):
+    left = width * box['Left']
+    top = height * box['Top'] 
+    draw.rectangle([left, top, left + (width * box['Width']), top + (height * box['Height'])], outline=boxColor, width=2)
+
+def ShowSelectedElement(draw, box, width, height, boxColor):
+    left = width * box['Left']
+    top = height * box['Top'] 
+    draw.rectangle([left, top, left + (width * box['Width']), top + (height * box['Height'])], fill=boxColor)
+
+def draw_bounding_boxes(image_path, blocks):
+    image = Image.open(image_path)
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    
+    for block in blocks:
+        if 'Geometry' in block and 'BoundingBox' in block['Geometry']:
+            box = block['Geometry']['BoundingBox']
+            if block['BlockType'] == "KEY_VALUE_SET":
+                color = 'red' if block.get('EntityTypes', [''])[0] == "KEY" else 'green'
+            elif block['BlockType'] == 'TABLE':
+                color = 'blue'
+            elif block['BlockType'] == 'CELL':
+                color = 'yellow'
+            elif block['BlockType'] == 'SELECTION_ELEMENT' and block.get('SelectionStatus') == 'SELECTED':
+                ShowSelectedElement(draw, box, width, height, 'blue')
+                continue
+            else:
+                color = 'red'
+            ShowBoundingBox(draw, box, width, height, color)
+    
+    image_path_with_boxes = image_path.replace(".png", "_boxed.png")
+    image.save(image_path_with_boxes)
+    return image_path_with_boxes
+
+def query_document(image_bytes, question):
+    response = client.analyze_document(
+        Document={'Bytes': image_bytes},
+        FeatureTypes=["TABLES", "FORMS", "QUERIES"],
+        QueriesConfig={'Queries': [{'Text': question}]}
+    )
+    
+    answer = "No answer found."
+    for block in response.get('Blocks', []):
+        if block["BlockType"] == "QUERY_RESULT":
+            answer = block["Text"]
+            break
+    
+    return answer
 
 def main(page: Page):
     page.title = "Botani"
@@ -26,55 +92,62 @@ def main(page: Page):
         "RobotoMonoItalic": f"fonts/RobotoMono-Italic-VariableFont.ttf"
     }
 
-    def pick_files_result(e: FilePickerResultEvent):
-        selected_files.value = (
-            ", ".join(map(lambda f: f.name, e.files)) if e.files else "Cancelled!"
-        )
-        selected_files.update()
-
-    def process_image(e):
+    def process_image(e, result_image, file_picker):
         if file_picker.result and file_picker.result.files:
             image_path = file_picker.result.files[0].path
-            print(image_path)
 
             if os.path.exists(image_path):
-                predicted_class, confidence = predict(image_path)
-                conf_converted = confidence * 100
-                
-                result_pred.value = f"Prediction: {ref_class_names.get(predicted_class)}"
-                result_conf.value = f"[{conf_converted:.2f}% Confident]"
-                result_image.src = image_path
-                prompt_container.visible = True
-
-                result_pred.color = "green" if predicted_class == "Normal" else "red"
-                result_conf.color = "green" if confidence > 0.8 else "orange" if confidence > 0.5 else "red"
-
+                with open(image_path, "rb") as image_file:
+                    image_bytes = image_file.read()
+                response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
+                blocks = response.get('Blocks', [])
+                boxed_image_path = draw_bounding_boxes(image_path, blocks)
+                result_image.src = boxed_image_path
                 result_image.visible = True
+                prompt_container.visible = True
                 select_image.visible = False
                 restart_button.visible = True
-                result_pred.update()
-                result_conf.update()
+
+                def process_query(e):
+                    global first_prompt_entered
+
+                    question = prompt_input.value
+
+                    input_text = query_document(image_bytes, question)
+                    type_speed = 0.001
+
+                    if first_prompt_entered:
+                        prompt_display.content.controls.append(Text("", size=14, font_family="RobotoMono", weight=FontWeight.W_300, color="#cbddd1"))
+                        prompt_display.update()
+                        first_prompt_entered = False
+                    else:
+                        prompt_display.content.controls[-1].value = ""
+                        prompt_display.update()
+
+                    for char in input_text:
+                        prompt_display.content.controls[-1].value += char
+                        prompt_display.update()
+                        time.sleep(type_speed)
+
+                prompt_input.on_submit = process_query
+
+                result_image.update()
+                prompt_input.update()
                 prompt_container.update()
                 restart_button.update()
-                result_image.update()
                 select_image.update()
-            else:
-                result_pred.value = f"Error: File '{image_path}' does not exist."
-                result_pred.update()
-                result_conf.update()
 
     def restart_process(e):
-        result_pred.value = ""
-        result_conf.value = ""
+        global first_prompt_entered
+
         result_image.visible = False
         select_image.visible = True
         restart_button.visible = False
-        prompt_display.content.controls[-1].value = ""
+        if not(first_prompt_entered):
+            prompt_display.content.controls[-1].value = ""
         prompt_input.value = ""
         prompt_container.visible = False
 
-        result_pred.update()
-        result_conf.update()
         restart_button.update()
         result_image.update()
         select_image.update()
@@ -82,27 +155,22 @@ def main(page: Page):
         prompt_display.update()
         prompt_container.update()
 
-    file_picker = FilePicker(on_result=process_image)
-    selected_files = Text()
-    
-    page.overlay.append(file_picker)
-
     restart_button = TextButton(content=Text("Start over", font_family="RobotoMono", size=14, weight=FontWeight.W_300, color="#cbddd1"), visible=False, on_click=restart_process)
-    
-    result_pred = Text(size=30, font_family="RobotoFlex", weight=FontWeight.W_700)
-    result_conf = Text(size=20, font_family="RobotoMono", weight=FontWeight.W_500)
 
     initial_image = ft.Image(src="assets/result_initial_new.png", width=350, height=350, border_radius=border_radius.all(10))
-    result_image = ft.Image(src="assets/result_initial_new.png", width=350, height=350, border_radius=border_radius.all(10), fit=ft.ImageFit.FILL)
+    result_image = ft.Image(src="assets/result_initial_new.png", width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
     result_image.visible = False
+
+    file_picker = FilePicker()
+    file_picker.on_result = lambda e: process_image(e, result_image, file_picker)
+    page.overlay.append(file_picker)
 
     select_image = TextButton(content=initial_image, on_click=lambda _: file_picker.pick_files(allow_multiple=False))
 
-    prompt_text = Text("Enter prompt:", font_family="RobotoMono", size=16, weight=FontWeight.W_300, color="#cbddd1")
+    prompt_text = Text("Enter query:", font_family="RobotoMono", size=16, weight=FontWeight.W_300, color="#cbddd1")
     prompt_input = ft.TextField(
-        hint_text="Type your prompt here",
-        width=350,
-        on_submit=lambda e: generating_response()
+        hint_text="Type your query here",
+        width=350
     )
 
     #prompt_display = Text("LLM will respond here.", size=16, font_family="RobotoMono", weight=FontWeight.W_300, color="#cbddd1")
@@ -112,25 +180,6 @@ def main(page: Page):
     )
 
     prompt_container = Container(content=ft.Column([prompt_text, prompt_input, prompt_display]), visible=False)
-
-    def generating_response():
-        global first_prompt_entered
-
-        input_text = retrieve_and_generate_response(result_pred.value, prompt_input.value)
-        type_speed = 0.001
-
-        if first_prompt_entered:
-            prompt_display.content.controls.append(Text("", size=14, font_family="RobotoMono", weight=FontWeight.W_300, color="#cbddd1"))
-            prompt_display.update()
-            first_prompt_entered = False
-        else:
-            prompt_display.content.controls[-1].value = ""
-            prompt_display.update()
-
-        for char in input_text:
-            prompt_display.content.controls[-1].value += char
-            prompt_display.update()
-            time.sleep(type_speed)
 
     def route_change(e):
         page.views.clear()
@@ -175,8 +224,6 @@ def main(page: Page):
                                         content=ft.Column(
                                             [
                                                 result_image,
-                                                result_pred,
-                                                result_conf,
                                                 restart_button,
                                             ],
                                             alignment=ft.MainAxisAlignment.CENTER,
