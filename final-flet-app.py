@@ -4,12 +4,15 @@ import numpy as np
 import mindspore as ms
 import time
 
+import cv2
+
 from dotenv import load_dotenv
 from mindspore import Tensor
 from mindspore.train import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 from mindspore.nn import Softmax
 from PIL import Image, ImageDraw
+
 import flet as ft
 from flet import AppBar, CupertinoFilledButton, Page, Container, Text, View, FontWeight, colors, TextButton, padding, ThemeMode, border_radius, Image as FletImage, FilePicker, FilePickerResultEvent, icons
 
@@ -23,6 +26,10 @@ load_dotenv()
 AWS_REGION = os.getenv("AWS_REGION_TEXTRACT")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID_TEXTRACT")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY_TEXTRACT")
+
+# OpenCV camera
+cap = cv2.VideoCapture(0)
+deb_capt = False
 
 # AWS Textract Client
 client = boto3.client(
@@ -93,6 +100,10 @@ def main(page: Page):
         "RobotoMonoItalic": f"fonts/RobotoMono-Italic-VariableFont.ttf",
         "Minecraft": f"fonts/minecraft_font.ttf"
     }
+    
+    def process_image(image_src):
+        
+
     
     def process_image(e, result_image, file_picker):
         if file_picker.result and file_picker.result.files:
@@ -205,13 +216,54 @@ def main(page: Page):
                         ),
                         padding=padding.only(left=100, top=70)
                     ),
-                    Container(
-                        ft.ElevatedButton(content=Text("Get Started", font_family="Minecraft", size=18, weight=FontWeight.W_500, color="#000000"), on_click=lambda _: page.go("/ocr")),
-                        padding=padding.only(left=100, top=70),
-                    )
+                    ft.Row([
+                        Container(
+                            ft.ElevatedButton(content=Text("Upload Card", font_family="Minecraft", size=18, weight=FontWeight.W_500, color="#000000"), on_click=lambda _: page.go("/ocr")),
+                            padding=padding.only(left=100, top=70),
+                        ),
+                        Container(
+                            ft.ElevatedButton(content=Text("Capture Card", font_family="Minecraft", size=18, weight=FontWeight.W_500, color="#000000"), on_click=lambda _: page.go("/camocr")),
+                            padding=padding.only(left=100, top=70),
+                        ),
+                    ])
+                    
                 ],
             )
         )
+
+        if page.route == "/camocr":
+            page.views.append(
+                View(
+                    "/camocr", #1738
+                    [
+                        AppBar(color="#ffffff", bgcolor="#000000"),
+                        ft.Column([
+                            ft.Image(
+                                src="placeholder.jpg",
+                                width=400,
+                                height=300,
+                                fit=ft.ImageFit.CONTAIN,
+                            ),
+                            ft.Row([
+                                ft.ElevatedButton(
+                                    "Pick files",
+                                    icon=ft.icons.UPLOAD_FILE,
+                                    on_click=CaptureImage()
+                                ),
+                                ft.ElevatedButton(
+                                    "Process  Image",
+                                    icon=ft.icons.UPLOAD_FILE,
+                                    on_click=ProcessImage()
+                                ),
+                            ], alignment=ft.MainAxisAlignment.CENTER)
+                        ], 
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            width=650, 
+                        )
+                    ]
+                )
+            )
         
         if page.route == "/ocr":
             page.views.append(
