@@ -76,7 +76,7 @@ def main():
     s3_connection = session.resource('s3')
     client = session.client('textract', region_name='us-east-1')
     bucket = 'ai-spec-two-textract-bucket'
-    document = 'test_ocr.png'
+    document = 'baldev.jpg'
     block_count=process_text_detection(s3_connection,client,bucket,document)
     print("Blocks detected: " + str(block_count))
     
