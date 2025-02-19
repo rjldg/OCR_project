@@ -1,20 +1,21 @@
 import os
 import boto3
 import numpy as np
-import mindspore as ms
+# import mindspore as ms
 import time
+import base64
 
 import cv2
 
 from dotenv import load_dotenv
-from mindspore import Tensor
-from mindspore.train import Model
-from mindspore.train.serialization import load_checkpoint, load_param_into_net
-from mindspore.nn import Softmax
+# from mindspore import Tensor
+# from mindspore.train import Model
+# from mindspore.train.serialization import load_checkpoint, load_param_into_net
+# from mindspore.nn import Softmax
 from PIL import Image, ImageDraw
 
 import flet as ft
-from flet import AppBar, CupertinoFilledButton, Page, Container, Text, View, FontWeight, colors, TextButton, padding, ThemeMode, border_radius, Image as FletImage, FilePicker, FilePickerResultEvent, icons
+from flet import AppBar, Page, Container, Text, View, FontWeight, colors, TextButton, padding, ThemeMode, border_radius, Image as FletImage, FilePicker, FilePickerResultEvent, icons
 
 #from image_classifier.resnet50_archi import resnet50
 #from main import predict, retrieve_and_generate_response, ref_class_names
@@ -32,12 +33,12 @@ cap = cv2.VideoCapture(0)
 deb_capt = False
 
 # AWS Textract Client
-client = boto3.client(
-    'textract',
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
+# client = boto3.client(
+#     'textract',
+#     region_name=AWS_REGION,
+#     aws_access_key_id=AWS_ACCESS_KEY_ID,
+#     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+# )
 
 def ShowBoundingBox(draw, box, width, height, boxColor):
     left = width * box['Left']
@@ -101,17 +102,84 @@ def main(page: Page):
         "Minecraft": f"fonts/minecraft_font.ttf"
     }
     
-    def process_image(image_src):
-        
+    # Current Frame -------------------
+    captured_frame = ft.Image(
+        src="placeholder.jpg",
+        width=400,
+        height=500,
+        fit=ft.ImageFit.CONTAIN
+    )
+
+    # Iterating Capture Frames --------
+    def capture_frame():
+        cap = cv2.VideoCapture(0)
+        # # #
+        page.update()
+        try:
+            while True:
+                ret,frame = cap.read()
+                if ret:
+                    _, buffer = cv2.imencode('.png', frame)
+                    png_as_text = base64.b64encode(buffer).decode('utf-8') 
+                    captured_frame.src_base64 = png_as_text
+                    captured_frame.update()
+                    if deb_capt:
+                        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        _, buffer = cv2.imencode('.png', gray_frame)
+                        png_as_text = base64.b64encode(buffer).decode('utf-8') 
+                        captured_frame.src_base64 = png_as_text
+                        captured_frame.update()
+                        break
+        except Exception as e:
+            print(f"Error: {e}")
+
+    # Capture Frames
+    def trigger_capture():
+        global deb_capt
+        src_base64_img = captured_frame.src_base64
+        if (src_base64_img is not None):
+            deb_capt = True
+            # # #
+            page.update()
+
+            if src_base64_img.startswith('data:image'):
+                src_base64_img = src_base64_img.split(',')[1]
+            
+            img_data = base64.b64decode(src_base64_img)
+            np_img = np.frombuffer(img_data, dtype=np.uint8)
+            conv_img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+            cv2.imwrite('output/capture.png', conv_img)
+
 
     
     def process_image(e, result_image, file_picker):
-        if file_picker.result and file_picker.result.files:
-            image_path = file_picker.result.files[0].path
+        if result_image=="in_folder":
+            capture_path = "output/capture.png"
+            result_image = ft.Image(src=capture_path, width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
+        
+        def process_ocr():
+            if file_picker=="bypass":
+                if os.path.exists(capture_path):
+                    with open(capture_path, "rb") as image_file:
+                        image_bytes = image_file.read()
+                
+                response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
+                blocks = response.get('Blocks', [])
+                boxed_image_path = draw_bounding_boxes(capture_path, blocks)
+                result_image.src = boxed_image_path
+                result_image.visible = True
+                prompt_container.visible = True
+                select_image.visible = False
+                restart_button.visible = True
+            else:
+                image_path = ''
+                if file_picker.result and file_picker.result.files:
+                    image_path = file_picker.result.files[0].path
 
-            if os.path.exists(image_path):
-                with open(image_path, "rb") as image_file:
-                    image_bytes = image_file.read()
+                if os.path.exists(image_path):
+                    with open(image_path, "rb") as image_file:
+                        image_bytes = image_file.read()
+                
                 response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
                 blocks = response.get('Blocks', [])
                 boxed_image_path = draw_bounding_boxes(image_path, blocks)
@@ -121,34 +189,36 @@ def main(page: Page):
                 select_image.visible = False
                 restart_button.visible = True
 
-                def process_query(e):
-                    global first_prompt_entered
+            def process_query(e):
+                global first_prompt_entered
 
-                    question = prompt_input.value
+                question = prompt_input.value
 
-                    input_text = query_document(image_bytes, question)
-                    type_speed = 0.001
+                input_text = query_document(image_bytes, question)
+                type_speed = 0.001
 
-                    if first_prompt_entered:
-                        prompt_display.content.controls.append(Text("", size=14, font_family="Minecraft", weight=FontWeight.W_300, color="#000000"))
-                        prompt_display.update()
-                        first_prompt_entered = False
-                    else:
-                        prompt_display.content.controls[-1].value = ""
-                        prompt_display.update()
+                if first_prompt_entered:
+                    prompt_display.content.controls.append(Text("", size=14, font_family="Minecraft", weight=FontWeight.W_300, color="#000000"))
+                    prompt_display.update()
+                    first_prompt_entered = False
+                else:
+                    prompt_display.content.controls[-1].value = ""
+                    prompt_display.update()
 
-                    for char in input_text:
-                        prompt_display.content.controls[-1].value += char
-                        prompt_display.update()
-                        time.sleep(type_speed)
+                for char in input_text:
+                    prompt_display.content.controls[-1].value += char
+                    prompt_display.update()
+                    time.sleep(type_speed)
 
-                prompt_input.on_submit = process_query
+            prompt_input.on_submit = process_query
 
-                result_image.update()
-                prompt_input.update()
-                prompt_container.update()
-                restart_button.update()
-                select_image.update()
+            result_image.update()
+            prompt_input.update()
+            prompt_container.update()
+            restart_button.update()
+            select_image.update()
+        
+        process_ocr()
 
     def restart_process(e):
         global first_prompt_entered
@@ -199,8 +269,8 @@ def main(page: Page):
         page.views.append(
             View(
                 "/",
-                [
-                    AppBar(title_spacing=50, title=Text("OCR", font_family="Minecraft", size=40, weight=FontWeight.W_700, color="#000000"), bgcolor="#fffff", toolbar_height=120,
+                [ # title_spacing=50
+                    AppBar( title=Text("OCR", font_family="Minecraft", size=40, weight=FontWeight.W_700, color="#000000"), bgcolor="#fffff", toolbar_height=120,
                            actions=[
                                TextButton(content=Container(Text("GitHub", font_family="Minecraft", size=18, weight=FontWeight.W_400, color="#000000"), padding=padding.only(right=25, left=25)), url="https://github.com/rjldg/OCR_project"),
                                TextButton(content=Container(Text("About Us", font_family="Minecraft", size=18, weight=FontWeight.W_400, color="#000000"), padding=padding.only(right=25, left=25)), on_click=lambda _: page.go("/aboutus"))
@@ -238,22 +308,17 @@ def main(page: Page):
                     [
                         AppBar(color="#ffffff", bgcolor="#000000"),
                         ft.Column([
-                            ft.Image(
-                                src="placeholder.jpg",
-                                width=400,
-                                height=300,
-                                fit=ft.ImageFit.CONTAIN,
-                            ),
+                            captured_frame,
                             ft.Row([
                                 ft.ElevatedButton(
-                                    "Pick files",
+                                    "Capture",
                                     icon=ft.icons.UPLOAD_FILE,
-                                    on_click=CaptureImage()
+                                    on_click=trigger_capture()
                                 ),
                                 ft.ElevatedButton(
-                                    "Process  Image",
+                                    "Process Card",
                                     icon=ft.icons.UPLOAD_FILE,
-                                    on_click=ProcessImage()
+                                    on_click=process_image(None, "in_folder", "bypass")
                                 ),
                             ], alignment=ft.MainAxisAlignment.CENTER)
                         ], 
@@ -264,6 +329,7 @@ def main(page: Page):
                     ]
                 )
             )
+            capture_frame()
         
         if page.route == "/ocr":
             page.views.append(
