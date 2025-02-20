@@ -29,16 +29,16 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID_TEXTRACT")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY_TEXTRACT")
 
 # OpenCV camera
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 deb_capt = False
 
 # AWS Textract Client
-# client = boto3.client(
-#     'textract',
-#     region_name=AWS_REGION,
-#     aws_access_key_id=AWS_ACCESS_KEY_ID,
-#     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-# )
+client = boto3.client(
+    'textract',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
 
 def ShowBoundingBox(draw, box, width, height, boxColor):
     left = width * box['Left']
@@ -134,7 +134,7 @@ def main(page: Page):
             print(f"Error: {e}")
 
     # Capture Frames
-    def trigger_capture():
+    def trigger_capture(e):
         global deb_capt
         src_base64_img = captured_frame.src_base64
         if (src_base64_img is not None):
@@ -150,6 +150,13 @@ def main(page: Page):
             conv_img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
             cv2.imwrite('output/capture.png', conv_img)
 
+    def clear(e):
+        global deb_capt
+        captured_frame.src = "placeholder.jpg"
+        captured_frame.src_base64 = None
+        page.update()
+        deb_capt = False
+        capture_frame()
 
     
     def process_image(e, result_image, file_picker):
@@ -159,6 +166,7 @@ def main(page: Page):
         
         def process_ocr():
             if file_picker=="bypass":
+                image_bytes = ''
                 if os.path.exists(capture_path):
                     with open(capture_path, "rb") as image_file:
                         image_bytes = image_file.read()
@@ -310,21 +318,41 @@ def main(page: Page):
                         ft.Column([
                             captured_frame,
                             ft.Row([
+                                Container(
+                                    content=ft.Column(
+                                        [
+                                            result_image,
+                                            restart_button,
+                                        ],
+                                        alignment=ft.MainAxisAlignment.CENTER,
+                                    ),
+                                    width=400,
+                                    padding=padding.only(left=10, top=25)
+                                ),
                                 ft.ElevatedButton(
                                     "Capture",
                                     icon=ft.icons.UPLOAD_FILE,
-                                    on_click=trigger_capture()
+                                    on_click=lambda e: trigger_capture(e)
                                 ),
                                 ft.ElevatedButton(
                                     "Process Card",
                                     icon=ft.icons.UPLOAD_FILE,
-                                    on_click=process_image(None, "in_folder", "bypass")
+                                    on_click=lambda e: process_image(e, "in_folder", "bypass")
+                                ),
+                                ft.ElevatedButton(
+                                    "Retake",
+                                    icon=ft.icons.UPLOAD_FILE,
+                                    on_click=lambda e: clear(e)
+                                ),
+                                Container(
+                                    content=prompt_container,
+                                    width=400,
+                                    padding=padding.only(left=10, top=25)
                                 ),
                             ], alignment=ft.MainAxisAlignment.CENTER)
                         ], 
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                             alignment=ft.MainAxisAlignment.CENTER,
-                            width=650, 
                         )
                     ]
                 )
