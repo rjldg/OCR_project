@@ -4,6 +4,7 @@ import numpy as np
 # import mindspore as ms
 import time
 import base64
+import csv
 
 import cv2
 
@@ -21,6 +22,7 @@ from flet import AppBar, Page, Container, Text, View, FontWeight, colors, TextBu
 #from main import predict, retrieve_and_generate_response, ref_class_names
 
 first_prompt_entered = True
+first_prompt_entered_cam = True
 
 # Load environment variables
 load_dotenv()
@@ -71,9 +73,10 @@ def draw_bounding_boxes(image_path, blocks):
                 color = 'red'
             ShowBoundingBox(draw, box, width, height, color)
     
-    image_path_with_boxes = image_path.replace(".png", "_boxed.png")
-    image.save(image_path_with_boxes)
-    return image_path_with_boxes
+    base_name, ext = os.path.splitext(image_path)
+    annotated_image_path = f"{base_name}_annotated{ext}"
+    image.save(annotated_image_path)
+    return annotated_image_path
 
 def query_document(image_bytes, question):
     response = client.analyze_document(
@@ -89,6 +92,41 @@ def query_document(image_bytes, question):
             break
     
     return answer
+
+def save_to_csv(key_values):
+    identity_number = key_values.get('IdentityNumber')
+    if not identity_number:
+        return "No Identity Number Found"
+    filename = f"{identity_number}.csv"
+    if os.path.exists(filename):
+        return f"Data for ID {identity_number} already exists."
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Key", "Value"])
+        for key, value in key_values.items():
+            writer.writerow([key, value])
+    return f"Data saved as {filename}"
+
+def extract_key_values(response):
+    key_values = {}
+    for block in response.get('Blocks', []):
+        if block['BlockType'] == 'KEY_VALUE_SET' and 'EntityTypes' in block and 'KEY' in block['EntityTypes']:
+            key = None
+            value = None
+            if 'Relationships' in block:
+                for rel in block['Relationships']:
+                    if rel['Type'] == 'CHILD':
+                        key = ''.join([w['Text'] for w in response['Blocks'] if w['Id'] in rel['Ids'] and 'Text' in w])
+                    elif rel['Type'] == 'VALUE':
+                        for value_id in rel['Ids']:
+                            value_block = next((b for b in response['Blocks'] if b['Id'] == value_id), None)
+                            if value_block and 'Relationships' in value_block:
+                                for v_rel in value_block['Relationships']:
+                                    if v_rel['Type'] == 'CHILD':
+                                        value = ''.join([w['Text'] for w in response['Blocks'] if w['Id'] in v_rel['Ids'] and 'Text' in w])
+            if key and value:
+                key_values[key] = value
+    return key_values
 
 def main(page: Page):
 
@@ -159,76 +197,121 @@ def main(page: Page):
         capture_frame()
 
     
-    def process_image(e, result_image, file_picker):
-        if result_image=="in_folder":
-            capture_path = "output/capture.png"
-            result_image = ft.Image(src=capture_path, width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
+    def process_image_camera(e, result_image_check, file_picker):
+        capture_path = "output/capture.png"
+        #result_image_cam = ft.Image(src=capture_path, width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
         
         def process_ocr():
-            if file_picker=="bypass":
-                image_bytes = ''
-                if os.path.exists(capture_path):
-                    with open(capture_path, "rb") as image_file:
-                        image_bytes = image_file.read()
-                
-                response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
-                blocks = response.get('Blocks', [])
-                boxed_image_path = draw_bounding_boxes(capture_path, blocks)
-                result_image.src = boxed_image_path
-                result_image.visible = True
-                prompt_container.visible = True
-                select_image.visible = False
-                restart_button.visible = True
-            else:
-                image_path = ''
-                if file_picker.result and file_picker.result.files:
-                    image_path = file_picker.result.files[0].path
+            image_bytes = ''
+            if os.path.exists(capture_path):
+                with open(capture_path, "rb") as image_file:
+                    image_bytes = image_file.read()
+            
+            response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
+            blocks = response.get('Blocks', [])
+            boxed_image_path = draw_bounding_boxes(capture_path, blocks)
+            result_image_cam.src = boxed_image_path
+            result_image_cam.visible = True
+            captured_frame.visible = False
 
-                if os.path.exists(image_path):
-                    with open(image_path, "rb") as image_file:
-                        image_bytes = image_file.read()
-                
+            capture_button.visible = False
+            process_button.visible = False
+            retake_button.visible = False
+
+            # For displaying key-value pairs
+            key_values = extract_key_values(response)
+            message = save_to_csv(key_values)
+            
+            prompt_container_cam.visible = True
+            #select_image_cam.visible = False
+            restart_button_cam.visible = True
+
+            global first_prompt_entered_cam
+
+            #question = prompt_input.value
+            #input_text = query_document(image_bytes, question)
+            prompt_text_cam.value = message + '\n'
+            key_val = "\n\n".join([f"{key}: {value}" for key, value in key_values.items()])
+            type_speed = 0.001
+            if first_prompt_entered_cam:
+                prompt_display_cam.content.controls.append(Text("", size=15, font_family="RobotoFlex", weight=FontWeight.W_400, color="#000000"))
+                prompt_display_cam.update()
+                first_prompt_entered = False
+            else:
+                prompt_display_cam.content.controls[-1].value = ""
+                prompt_display_cam.update()
+            for char in key_val:
+                prompt_display_cam.content.controls[-1].value += char
+                prompt_display_cam.update()
+                time.sleep(type_speed)
+            #prompt_input.on_submit = process_query
+            result_image_cam.update()
+            #prompt_input.update()
+            prompt_container_cam.update()
+            restart_button_cam.update()
+            captured_frame.update()
+            capture_button.update()
+            process_button.update()
+            retake_button.update()
+            #select_image.update()
+        
+        process_ocr()
+
+    def process_image_upload(e, result_image, file_picker):
+        if file_picker.result and file_picker.result.files:
+            image_path = file_picker.result.files[0].path
+
+            if os.path.exists(image_path):
+                with open(image_path, "rb") as image_file:
+                    image_bytes = image_file.read()
                 response = client.analyze_document(Document={'Bytes': image_bytes}, FeatureTypes=["TABLES", "FORMS"])
+                # For bounding boxes
                 blocks = response.get('Blocks', [])
                 boxed_image_path = draw_bounding_boxes(image_path, blocks)
                 result_image.src = boxed_image_path
                 result_image.visible = True
+
+                # For displaying key-value pairs
+                key_values = extract_key_values(response)
+                message = save_to_csv(key_values)
+                
                 prompt_container.visible = True
                 select_image.visible = False
                 restart_button.visible = True
 
-            def process_query(e):
                 global first_prompt_entered
 
-                question = prompt_input.value
+                #question = prompt_input.value
 
-                input_text = query_document(image_bytes, question)
+                #input_text = query_document(image_bytes, question)
+
+                prompt_text.value = message + '\n'
+                key_val = "\n\n".join([f"{key}: {value}" for key, value in key_values.items()])
+
                 type_speed = 0.001
 
                 if first_prompt_entered:
-                    prompt_display.content.controls.append(Text("", size=14, font_family="Minecraft", weight=FontWeight.W_300, color="#000000"))
+                    prompt_display.content.controls.append(Text("", size=15, font_family="RobotoFlex", weight=FontWeight.W_400, color="#000000"))
                     prompt_display.update()
                     first_prompt_entered = False
                 else:
                     prompt_display.content.controls[-1].value = ""
                     prompt_display.update()
 
-                for char in input_text:
+                for char in key_val:
                     prompt_display.content.controls[-1].value += char
                     prompt_display.update()
                     time.sleep(type_speed)
 
-            prompt_input.on_submit = process_query
+                #prompt_input.on_submit = process_query
 
-            result_image.update()
-            prompt_input.update()
-            prompt_container.update()
-            restart_button.update()
-            select_image.update()
-        
-        process_ocr()
+                result_image.update()
+                #prompt_input.update()
+                prompt_container.update()
+                restart_button.update()
+                select_image.update()
 
-    def restart_process(e):
+    def restart_process_upload(e):
         global first_prompt_entered
 
         result_image.visible = False
@@ -236,32 +319,55 @@ def main(page: Page):
         restart_button.visible = False
         if not(first_prompt_entered):
             prompt_display.content.controls[-1].value = ""
-        prompt_input.value = ""
+        #prompt_input.value = ""
         prompt_container.visible = False
 
         restart_button.update()
         result_image.update()
         select_image.update()
-        prompt_input.update()
+        #prompt_input.update()
         prompt_display.update()
         prompt_container.update()
 
-    restart_button = TextButton(content=Text("Start over", font_family="Minecraft", size=14, weight=FontWeight.W_300, color="#000000"), visible=False, on_click=restart_process)
+    def restart_process_cam(e):
+        global first_prompt_entered_cam
+
+        result_image_cam.visible = False
+        #select_image.visible = True
+        restart_button_cam.visible = False
+        if not(first_prompt_entered_cam):
+            prompt_display_cam.content.controls[-1].value = ""
+        #prompt_input.value = ""
+        prompt_container_cam.visible = False
+        captured_frame.visible = True
+        capture_button.visible = True
+        process_button.visible = True
+        retake_button.visible = True
+
+        restart_button_cam.update()
+        result_image_cam.update()
+        #select_image.update()
+        #prompt_input.update()
+        prompt_display_cam.update()
+        prompt_container_cam.update()
+        captured_frame.update()
+        capture_button.update()
+        process_button.update()
+        retake_button.update()
+
+    restart_button = TextButton(content=Text("Start over", font_family="Minecraft", size=14, weight=FontWeight.W_300, color="#000000"), visible=False, on_click=restart_process_upload)
 
     initial_image = ft.Image(src="assets/result_initial.png", width=350, height=350, border_radius=border_radius.all(10))
     result_image = ft.Image(src="assets/result_initial.png", width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
     result_image.visible = False
 
     file_picker = FilePicker()
-    file_picker.on_result = lambda e: process_image(e, result_image, file_picker)
+    file_picker.on_result = lambda e: process_image_upload(e, result_image, file_picker)
     page.overlay.append(file_picker)
 
     select_image = TextButton(content=initial_image, on_click=lambda _: file_picker.pick_files(allow_multiple=False))
 
     prompt_text = Text("Enter query:", font_family="Minecraft", size=16, weight=FontWeight.W_300, color="#000000")
-    prompt_input = ft.TextField(
-        width=350,
-    )
 
     #prompt_display = Text("LLM will respond here.", size=16, font_family="RobotoMono", weight=FontWeight.W_300, color="#cbddd1")
     prompt_display = Container(
@@ -269,7 +375,47 @@ def main(page: Page):
         content=ft.Column(scroll="auto")
     )
 
-    prompt_container = Container(content=ft.Column([prompt_text, prompt_input, prompt_display]), visible=False)
+    prompt_container = Container(content=ft.Column([prompt_text, prompt_display]), visible=False)
+
+    # Control objects for camera page
+
+    restart_button_cam = TextButton(content=Text("Start over", font_family="Minecraft", size=14, weight=FontWeight.W_300, color="#000000"), visible=False, on_click=restart_process_cam)
+
+    #initial_image_cam = ft.Image(src="assets/result_initial.png", width=350, height=350, border_radius=border_radius.all(10))
+    result_image_cam = ft.Image(src="assets/result_initial.png", width=400, height=500, border_radius=border_radius.all(10), fit=ft.ImageFit.CONTAIN)
+    result_image_cam.visible = False
+
+    #file_picker = FilePicker()
+    #file_picker.on_result = lambda e: process_image_upload(e, result_image, file_picker)
+    #page.overlay.append(file_picker)
+
+    #select_image = TextButton(content=initial_image, on_click=lambda _: file_picker.pick_files(allow_multiple=False))
+
+    prompt_text_cam = Text("Enter query:", font_family="Minecraft", size=16, weight=FontWeight.W_300, color="#000000")
+
+    #prompt_display = Text("LLM will respond here.", size=16, font_family="RobotoMono", weight=FontWeight.W_300, color="#cbddd1")
+    prompt_display_cam = Container(
+        height = 450,
+        content=ft.Column(scroll="auto")
+    )
+
+    prompt_container_cam = Container(content=ft.Column([prompt_text_cam, prompt_display_cam]), visible=False)
+
+    capture_button = ft.ElevatedButton(
+        "Capture",
+        icon=ft.icons.UPLOAD_FILE,
+        on_click=lambda e: trigger_capture(e)
+    )
+    process_button = ft.ElevatedButton(
+        "Process Card",
+        icon=ft.icons.UPLOAD_FILE,
+        on_click=lambda e: process_image_camera(e, result_image_cam, "bypass")
+    )
+    retake_button = ft.ElevatedButton(
+        "Retake",
+        icon=ft.icons.UPLOAD_FILE,
+        on_click=lambda e: clear(e)
+    )
 
     def route_change(e):
         page.views.clear()
@@ -321,31 +467,19 @@ def main(page: Page):
                                 Container(
                                     content=ft.Column(
                                         [
-                                            result_image,
-                                            restart_button,
+                                            result_image_cam,
+                                            restart_button_cam,
                                         ],
                                         alignment=ft.MainAxisAlignment.CENTER,
                                     ),
                                     width=400,
                                     padding=padding.only(left=10, top=25)
                                 ),
-                                ft.ElevatedButton(
-                                    "Capture",
-                                    icon=ft.icons.UPLOAD_FILE,
-                                    on_click=lambda e: trigger_capture(e)
-                                ),
-                                ft.ElevatedButton(
-                                    "Process Card",
-                                    icon=ft.icons.UPLOAD_FILE,
-                                    on_click=lambda e: process_image(e, "in_folder", "bypass")
-                                ),
-                                ft.ElevatedButton(
-                                    "Retake",
-                                    icon=ft.icons.UPLOAD_FILE,
-                                    on_click=lambda e: clear(e)
-                                ),
+                                capture_button,
+                                process_button,
+                                retake_button,
                                 Container(
-                                    content=prompt_container,
+                                    content=prompt_container_cam,
                                     width=400,
                                     padding=padding.only(left=10, top=25)
                                 ),
